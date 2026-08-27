@@ -2,19 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronRight, CircleHelp, Compass,
+  AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, CircleHelp, Compass,
   Eraser, ExternalLink, LoaderCircle, LocateFixed, LockKeyhole, MapPin,
   PenLine, RotateCcw, Search, ShieldCheck,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { type RuleResult, type Stroke, runRuleEngine } from "@/lib/rule-engine";
 
 type Stage = "setup" | "write" | "confirm" | "sealed" | "result";
-type LocationMode = "manual" | "device";
 
 const stages = [
   { key: "setup", label: "寻物", number: "一" },
@@ -34,6 +35,12 @@ function formatTime(value: Date | null) {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
     minute: "2-digit", second: "2-digit", hour12: false,
   }).format(value);
+}
+
+function isSpecificOrigin(value: string) {
+  const normalized = value.trim().replace(/[，,。\s]/g, "");
+  if (normalized.length < 4) return false;
+  return !/^(家|家里|家中|客厅|卧室|公司|办公室|学校|宿舍|房间)$/.test(normalized);
 }
 
 function CompassMark({ compact = false }: { compact?: boolean }) {
@@ -123,9 +130,8 @@ function WritingCanvas({ strokes, setStrokes, onFirstStroke }: {
 export default function Home() {
   const [stage, setStage] = useState<Stage>("setup");
   const [itemName, setItemName] = useState("");
-  const [locationMode, setLocationMode] = useState<LocationMode>("manual");
   const [manualOrigin, setManualOrigin] = useState("");
-  const [deviceOrigin, setDeviceOrigin] = useState("");
+  const [deviceCoordinate, setDeviceCoordinate] = useState("");
   const [locationStatus, setLocationStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [locationError, setLocationError] = useState("");
   const [selfConfirmed, setSelfConfirmed] = useState(false);
@@ -138,16 +144,29 @@ export default function Home() {
   const [ruleResult, setRuleResult] = useState<RuleResult | null>(null);
   const currentStage = stageIndex(stage);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "当地时区";
-  const origin = locationMode === "manual" ? manualOrigin.trim() : deviceOrigin;
+  const origin = manualOrigin.trim();
+  const originReady = isSpecificOrigin(origin);
 
   function clearWriting() {
     setStrokes([]); setRecognizedCharacter(""); setFirstStrokeAt(null); setFinalConfirmed(false);
   }
   function restart() {
-    setStage("setup"); setItemName(""); setManualOrigin(""); setDeviceOrigin("");
-    setLocationMode("manual"); setLocationStatus("idle"); setLocationError("");
+    setStage("setup"); setItemName(""); setManualOrigin(""); setDeviceCoordinate("");
+    setLocationStatus("idle"); setLocationError("");
     setSelfConfirmed(false); setDisclaimerConfirmed(false); clearWriting();
     setRevealedRound(0); setRuleResult(null);
+  }
+
+  async function reverseGeocode(latitude: number, longitude: number) {
+    const query = new URLSearchParams({
+      format: "jsonv2", lat: String(latitude), lon: String(longitude),
+      zoom: "16", addressdetails: "1", "accept-language": "zh-CN",
+    });
+    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${query.toString()}`);
+    if (!response.ok) throw new Error("reverse geocoding failed");
+    const data = await response.json() as { display_name?: string };
+    if (!data.display_name) throw new Error("address missing");
+    return data.display_name;
   }
 
   function requestDeviceLocation() {
@@ -156,12 +175,19 @@ export default function Home() {
     }
     setLocationStatus("loading"); setLocationError("");
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         const latitude = position.coords.latitude.toFixed(5);
         const longitude = position.coords.longitude.toFixed(5);
         const accuracy = Math.round(position.coords.accuracy);
-        setDeviceOrigin(`设备位置 ${latitude}, ${longitude}（误差约 ${accuracy} 米）`);
-        setLocationStatus("ready");
+        setDeviceCoordinate(`${latitude}, ${longitude}（误差约 ${accuracy} 米）`);
+        try {
+          const address = await reverseGeocode(position.coords.latitude, position.coords.longitude);
+          setManualOrigin(address);
+          setLocationStatus("ready");
+        } catch {
+          setLocationStatus("error");
+          setLocationError("已经取得坐标，但没能自动换成地址。请根据你所在位置手动填写。 ");
+        }
       },
       (error) => {
         const message = error.code === error.PERMISSION_DENIED ? "你没有授权定位，请改用手动填写。" : "暂时无法取得位置，请改用手动填写。";
@@ -214,33 +240,26 @@ export default function Home() {
                 <label htmlFor="item-name" className="text-xs font-medium tracking-[0.12em] text-black/55">物品名称</label>
                 <Input id="item-name" value={itemName} onChange={(e) => setItemName(e.target.value.slice(0, 24))} placeholder="例如：黑色钱包、银色戒指、车钥匙" className="mt-3 h-13 rounded-none border-0 border-b border-black/25 bg-transparent px-0 text-lg shadow-none focus-visible:border-black focus-visible:ring-0" />
                 <div className="mt-7 border-t border-black/10 pt-6">
-                  <div className="flex items-center gap-2 text-xs font-medium tracking-[0.12em] text-black/55"><MapPin className="size-3.5" /> 推演地点</div>
-                  <p className="mt-2 text-xs leading-5 text-black/45">方向会以这里为原点。可以写“家中客厅、公司工位”，不需要填写家庭门牌。</p>
-                  <RadioGroup value={locationMode} onValueChange={(value) => setLocationMode(value as LocationMode)} className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <label className={`location-choice ${locationMode === "manual" ? "location-choice--active" : ""}`}>
-                      <RadioGroupItem value="manual" className="border-black/30 text-[#a63f2d]" />
-                      <span><strong>手动填写</strong><small>最准确，也最少收集信息</small></span>
-                    </label>
-                    <label className={`location-choice ${locationMode === "device" ? "location-choice--active" : ""}`}>
-                      <RadioGroupItem value="device" className="border-black/30 text-[#a63f2d]" />
-                      <span><strong>使用设备位置</strong><small>需要浏览器明确授权</small></span>
-                    </label>
-                  </RadioGroup>
-                  {locationMode === "manual" ? (
-                    <Input id="manual-origin" value={manualOrigin} onChange={(e) => setManualOrigin(e.target.value.slice(0, 40))} placeholder="例如：家中客厅" className="mt-4 h-11 rounded-none border-0 border-b border-black/25 bg-transparent px-0 shadow-none focus-visible:border-black focus-visible:ring-0" />
-                  ) : (
-                    <div className="mt-4 rounded-xl border border-black/10 bg-black/[0.025] p-4">
+                  <div className="flex items-center gap-2 text-xs font-medium tracking-[0.12em] text-black/55"><MapPin className="size-3.5" /> 你提交这个字时所在的实际地点</div>
+                  <p className="mt-2 text-xs leading-5 text-black/45">这里要填真实地理地点，例如“北京市朝阳区望京街道”，不能写“家中客厅”。系统用它记录你从哪里起测；屋内位置会在结果里另行说明。</p>
+                  <div className="mt-4">
+                    <Input id="manual-origin" value={manualOrigin} onChange={(e) => setManualOrigin(e.target.value.slice(0, 120))} placeholder="例如：北京市朝阳区望京街道（可继续写到小区）" className="h-11 rounded-none border-0 border-b border-black/25 bg-transparent px-0 shadow-none focus-visible:border-black focus-visible:ring-0" />
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
                       <Button type="button" variant="outline" onClick={requestDeviceLocation} disabled={locationStatus === "loading"} className="rounded-full border-black/20 bg-transparent">
                         {locationStatus === "loading" ? <LoaderCircle className="animate-spin" /> : <LocateFixed />}
-                        {locationStatus === "ready" ? "重新检测" : "授权并检测位置"}
+                        {locationStatus === "ready" ? "重新定位并换算" : "自动定位并填入地址"}
                       </Button>
-                      {deviceOrigin && <p className="mt-3 text-xs leading-5 text-black/60">{deviceOrigin}</p>}
-                      {locationError && <p className="mt-3 text-xs leading-5 text-[#a63f2d]">{locationError}</p>}
+                      <span className="text-[11px] text-black/40">也可以完全不授权，直接手填</span>
                     </div>
-                  )}
+                    {deviceCoordinate && <p className="mt-3 text-xs leading-5 text-black/55">设备坐标：{deviceCoordinate}</p>}
+                    {locationStatus === "ready" && <p className="mt-2 text-xs leading-5 text-[#3f6a4a]">已自动换算。请看一眼地址是否正确，不对就直接修改。</p>}
+                    {locationError && <p className="mt-2 text-xs leading-5 text-[#a63f2d]">{locationError}</p>}
+                    {origin && !originReady && <p className="mt-2 text-xs leading-5 text-[#a63f2d]">请填写真实行政地点，不要只写“家”“客厅”或“公司”。</p>}
+                    <p className="mt-2 text-[11px] leading-5 text-black/40">建议写到区县、街道或小区；不需要填写姓名、房号或家庭门牌。</p>
+                  </div>
                   <div className="privacy-note mt-4">
                     <ShieldCheck className="size-4 shrink-0" />
-                    <p>应用不会通过 IP 推测地点。你授权的坐标或手填地点只保留在本次页面内，不写入数据库；网站托管网络仍会像普通网站一样处理连接所需的 IP。</p>
+                    <p>应用不会用 IP 猜你的位置，也不会把地点写入数据库。只有你点击“自动定位”后，浏览器才会请求坐标，并把坐标交给 OpenStreetMap 的 Nominatim 服务换成附近地址；换算可能偏一条街，所以最终由你确认和修改。</p>
                   </div>
                 </div>
                 <div className="mt-7 space-y-4 border-t border-black/10 pt-6">
@@ -248,7 +267,7 @@ export default function Home() {
                   <label className="flex cursor-pointer items-start gap-3 text-sm leading-6"><Checkbox checked={disclaimerConfirmed} onCheckedChange={(v) => setDisclaimerConfirmed(v === true)} className="mt-1 border-black/35 data-[state=checked]:border-[#a63f2d] data-[state=checked]:bg-[#a63f2d]" /><span>我理解本系统仅依据固定传统规则提供寻找提示，不保证物品一定能够找回。</span></label>
                 </div>
               </div>
-              <div className="mt-6 flex justify-end"><Button size="lg" disabled={!itemName.trim() || !origin || !selfConfirmed || !disclaimerConfirmed} onClick={() => setStage("write")} className="h-12 rounded-full bg-[#a63f2d] px-7 text-white shadow-none hover:bg-[#8f3425]">开始写字 <ChevronRight /></Button></div>
+              <div className="mt-6 flex justify-end"><Button size="lg" disabled={!itemName.trim() || !originReady || !selfConfirmed || !disclaimerConfirmed} onClick={() => setStage("write")} className="h-12 rounded-full bg-[#a63f2d] px-7 text-white shadow-none hover:bg-[#8f3425]">开始写字 <ChevronRight /></Button></div>
             </div>}
 
             {stage === "write" && <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -284,11 +303,23 @@ export default function Home() {
             {stage === "sealed" && <div className="grid min-h-[520px] place-items-center text-center animate-in fade-in duration-500"><div><div className="seal-pulse mx-auto grid size-24 place-items-center rounded-full border border-[#a63f2d]/30"><LockKeyhole className="size-8 text-[#a63f2d]" strokeWidth={1.4} /></div><p className="mt-8 font-serif text-3xl">本次记录已封存</p><p className="mt-3 text-sm text-black/45">规则、顺序与后续线索将不再重新计算</p></div></div>}
 
             {stage === "result" && ruleResult && <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-              <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="section-kicker">固定规则推演 · 第四步</p><h1 className="mt-3 font-serif text-3xl font-medium tracking-[-0.03em] sm:text-5xl">从当前最强线索开始找。</h1></div><div className="rounded-full border border-black/15 px-3 py-1.5 text-xs text-black/50">{itemName} ·「{recognizedCharacter}」</div></div>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs text-black/45"><span className="rounded-full border border-black/10 px-3 py-1.5">原点：{origin}</span><span className="rounded-full border border-black/10 px-3 py-1.5">{ruleResult.ganzhiDay}日 · {ruleResult.hourBranch}时</span><span className="rounded-full border border-black/10 px-3 py-1.5">规则 0.2</span></div>
-              <div className="result-card mt-7"><div className="result-card__compass"><CompassMark /></div><div className="result-card__content"><p className="text-xs tracking-[0.16em] text-[#a63f2d] uppercase">{ruleResult.rounds[revealedRound].eyebrow}</p><h2 className="mt-3 font-serif text-3xl leading-tight sm:text-4xl">{ruleResult.rounds[revealedRound].title}</h2><p className="mt-4 max-w-lg text-sm leading-7 text-black/58 sm:text-base">{ruleResult.rounds[revealedRound].body}</p><div className="mt-6 flex flex-wrap gap-2">{ruleResult.rounds[revealedRound].tags.map((tag) => <span key={tag} className="rounded-full border border-black/15 px-3 py-1 text-xs text-black/55">{tag}</span>)}</div></div></div>
-              <div className="basis-note mt-4"><span>本轮依据</span><p>{ruleResult.rounds[revealedRound].basis}</p></div>
-              <div className="mt-6 flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-2" aria-label="线索轮次">{ruleResult.rounds.map((_, index) => <span key={index} className={`round-dot ${index <= revealedRound ? "round-dot--active" : ""}`} />)}</div>{revealedRound < ruleResult.rounds.length - 1 ? <Button size="lg" onClick={() => setRevealedRound((value) => Math.min(value + 1, ruleResult.rounds.length - 1))} className="h-12 rounded-full bg-[#171512] px-7 text-white shadow-none hover:bg-black">这里没有找到 <ChevronRight /></Button> : <Button variant="outline" size="lg" onClick={restart} className="h-12 rounded-full border-black/20 bg-transparent px-7"><RotateCcw /> 结束本次寻物</Button>}</div>
+              <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="section-kicker">寻找位置 · 第四步</p><h1 className="mt-3 font-serif text-3xl font-medium tracking-[-0.03em] sm:text-5xl">先看它可能在哪里。</h1></div><div className="rounded-full border border-black/15 px-3 py-1.5 text-xs text-black/50">{itemName} ·「{recognizedCharacter}」</div></div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-black/45"><span className="rounded-full border border-black/10 px-3 py-1.5">起点：{origin}</span><span className="rounded-full border border-black/10 px-3 py-1.5">第 {revealedRound + 1} 条，共 {ruleResult.rounds.length} 条</span></div>
+              <div className="result-card mt-7"><div className="result-card__compass"><CompassMark /><p className="result-place-label">先找这里</p><strong>{ruleResult.rounds[revealedRound].searchArea}</strong></div><div className="result-card__content"><p className="text-xs tracking-[0.16em] text-[#a63f2d] uppercase">{ruleResult.rounds[revealedRound].eyebrow}</p><h2 className="mt-3 font-serif text-3xl leading-tight sm:text-4xl">{ruleResult.rounds[revealedRound].title}</h2><p className="mt-4 max-w-lg text-sm leading-7 text-black/58 sm:text-base">{ruleResult.rounds[revealedRound].body}</p><ol className="search-steps mt-6">{ruleResult.rounds[revealedRound].steps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}</ol></div></div>
+              <Dialog>
+                <DialogTrigger asChild><Button variant="ghost" className="mt-3 rounded-full px-3 text-xs text-black/45 hover:bg-black/5 hover:text-black"><BookOpen /> 打开单独的推演依据</Button></DialogTrigger>
+                <DialogContent className="border-black/15 bg-[#f4efe6] sm:max-w-xl">
+                  <DialogHeader><DialogTitle className="font-serif text-2xl">推演依据</DialogTitle><DialogDescription className="leading-6">这里专门解释原理。关闭以后，寻找页仍然只显示你该去哪里找。</DialogDescription></DialogHeader>
+                  <dl className="evidence-list mt-2">
+                    <div><dt>规则依据</dt><dd>{ruleResult.rounds[revealedRound].basis}</dd></div>
+                    <div><dt>提交的字</dt><dd>「{recognizedCharacter}」；系统分析的是实际笔迹，没有转换简繁字形。</dd></div>
+                    <div><dt>时间输入</dt><dd>{ruleResult.ganzhiDay}日、{ruleResult.hourBranch}时；取最终笔迹第一笔的当地时间。</dd></div>
+                    <div><dt>固定版本</dt><dd>{ruleResult.engineVersion}；本次三轮在确认时已一次算完，点击“没找到”不会重新推演。</dd></div>
+                  </dl>
+                  <a className="mt-1 inline-flex items-center gap-1 text-xs text-[#8f3425] underline underline-offset-4" href="https://zh.wikisource.org/zh/欽定古今圖書集成/博物彙編/藝術典/第748卷" target="_blank" rel="noreferrer">查看古籍原文 <ExternalLink className="size-3" /></a>
+                </DialogContent>
+              </Dialog>
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-2" aria-label="线索轮次">{ruleResult.rounds.map((_, index) => <span key={index} className={`round-dot ${index <= revealedRound ? "round-dot--active" : ""}`} />)}</div>{revealedRound < ruleResult.rounds.length - 1 ? <Button size="lg" onClick={() => setRevealedRound((value) => Math.min(value + 1, ruleResult.rounds.length - 1))} className="h-12 rounded-full bg-[#171512] px-7 text-white shadow-none hover:bg-black">这一处没找到，看下一处 <ChevronRight /></Button> : <Button variant="outline" size="lg" onClick={restart} className="h-12 rounded-full border-black/20 bg-transparent px-7"><RotateCcw /> 结束本次寻物</Button>}</div>
               <div className="mt-8 flex items-start gap-3 border-t border-black/10 pt-5 text-xs leading-6 text-black/45"><AlertTriangle className="mt-1 size-4 shrink-0 text-[#a63f2d]" /><p>结果由固定程序根据真实笔迹触发，不使用随机数或生活概率。它属于传统文化寻物提示，不保证找回，也不能作为指认他人的证据。<a className="ml-1 inline-flex items-center gap-1 text-[#8f3425] underline underline-offset-4" href="https://zh.wikisource.org/zh/欽定古今圖書集成/博物彙編/藝術典/第748卷" target="_blank" rel="noreferrer">查看原始规则 <ExternalLink className="size-3" /></a></p></div>
             </div>}
           </div></section>
