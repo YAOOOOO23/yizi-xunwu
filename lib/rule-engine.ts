@@ -3,8 +3,10 @@ export type Stroke = Point[];
 
 export type RuleRound = {
   eyebrow: string;
+  searchArea: string;
   title: string;
   body: string;
+  steps: string[];
   tags: string[];
   basis: string;
 };
@@ -21,15 +23,15 @@ type StrokeKind = "dot" | "horizontal" | "vertical" | "left-fall" | "right-fall"
 type Trigram = "乾" | "坤" | "震" | "巽" | "坎" | "离" | "艮" | "兑";
 type Element = "金" | "木" | "水" | "火" | "土";
 
-const trigramInfo: Record<Trigram, { direction: string; nature: string; place: string }> = {
-  乾: { direction: "西北", nature: "健", place: "较高、开阔或靠近外缘的位置" },
-  坤: { direction: "西南", nature: "顺", place: "贴近地面、承托物或较低的位置" },
-  震: { direction: "东", nature: "起", place: "刚被开启、移动或经常起落的位置" },
-  巽: { direction: "东南", nature: "入", place: "缝隙、入口、容器内部或深入的位置" },
-  坎: { direction: "北", nature: "陷", place: "凹陷、低处、孔洞或容易掉进去的位置" },
-  离: { direction: "南", nature: "丽", place: "明亮、发热、电器或显眼物体附近" },
-  艮: { direction: "东北", nature: "止", place: "边界、墙角、阻挡物或停止处" },
-  兑: { direction: "西", nature: "泽", place: "开口、浅槽、潮湿处或金属器物附近" },
+const trigramInfo: Record<Trigram, { direction: string; nature: string; place: string; short: string }> = {
+  乾: { direction: "西北", nature: "健", place: "较高、开阔或靠近外缘的位置", short: "高处或外缘" },
+  坤: { direction: "西南", nature: "顺", place: "贴近地面、承托物或较低的位置", short: "地面或承托物" },
+  震: { direction: "东", nature: "起", place: "刚被开启、移动或经常起落的位置", short: "开关或常移动处" },
+  巽: { direction: "东南", nature: "入", place: "缝隙、入口、容器内部或深入的位置", short: "缝隙或容器内部" },
+  坎: { direction: "北", nature: "陷", place: "凹陷、低处、孔洞或容易掉进去的位置", short: "低处或孔洞" },
+  离: { direction: "南", nature: "丽", place: "明亮、发热、电器或显眼物体附近", short: "灯具或电器旁" },
+  艮: { direction: "东北", nature: "止", place: "边界、墙角、阻挡物或停止处", short: "墙角或阻挡处" },
+  兑: { direction: "西", nature: "泽", place: "开口、浅槽、潮湿处或金属器物附近", short: "开口或金属器物旁" },
 };
 
 const elementPlaces: Record<Element, string> = {
@@ -38,6 +40,14 @@ const elementPlaces: Record<Element, string> = {
   水: "潮湿、低洼、流动路径或盛水容器附近",
   火: "灯、电器、热源或光亮位置附近",
   土: "地面、墙体、陶瓷、瓦器或厚重物附近",
+};
+
+const elementPlainNames: Record<Element, string> = {
+  金: "金属或坚硬物",
+  木: "木质家具或长直物",
+  水: "潮湿处或盛水容器",
+  火: "灯具、电器或热源",
+  土: "地面、墙边或陶瓷物",
 };
 
 function distance(a: Point, b: Point) {
@@ -166,9 +176,10 @@ export function runRuleEngine(input: { character: string; strokes: Stroke[]; tim
 
   if (input.character === "失") {
     rounds.push({
-      eyebrow: "第一轮 · 失物专条", title: "先扩大范围，并接受它较难寻找",
-      body: `你提交的字本身就是“失”。《新订指明心法》在失物专条中直接判为难觅。先以“${input.origin}”为中心扩大检查范围，不把它限定在一个小角落。`,
-      tags: ["难觅", "扩大范围"], basis: "凡字有失字体及字中，皆难觅。",
+      eyebrow: "第一处", searchArea: "原来范围的外一圈", title: "先把寻找范围扩大一圈",
+      body: `不要再反复翻同一个抽屉或角落。从“${input.origin}”开始，把相邻房间、门外和最近走过的路线一起检查。`,
+      steps: ["离开已经反复找过的小范围", "检查相邻房间、门口和最近经过的路线", "再检查随身包袋或当天换过的衣物"],
+      tags: ["扩大范围", "别只查原处"], basis: "失物专条原文：“凡字有失字体及字中，皆难觅。”",
     });
     detected.push("失字直断");
   }
@@ -179,20 +190,22 @@ export function runRuleEngine(input: { character: string; strokes: Stroke[]; tim
     const sameScore = trigrams.filter((item) => item.score === best.score && item.trigram !== best.trigram)[0];
     const direction = sameScore ? `${info.direction}或${trigramInfo[sameScore.trigram].direction}` : info.direction;
     rounds.push({
-      eyebrow: rounds.length ? "第二轮 · 八卦字形" : "第一轮 · 八卦字形",
-      title: `先往${direction}侧寻找`,
-      body: `以“${input.origin}”为原点，优先检查${direction}侧的${info.place}。字形触发${best.trigram}象，原书将其性情定为“${info.nature}”。`,
-      tags: [direction, `${best.trigram}象`, info.nature], basis: best.basis,
+      eyebrow: `${rounds.length ? "第二" : "第一"}处`, searchArea: `${direction}方向 · ${info.short}`,
+      title: `先去${direction}方向，找${info.short}`,
+      body: `以你提交这个字时所在的位置为中心，面向正北后转向${direction}。到这一侧后，不要泛泛地翻找，重点检查${info.place}。`,
+      steps: ["站回提交这个字时所在的位置", `先辨认正北，再转向${direction}`, `检查${info.place}`],
+      tags: [direction, info.short], basis: `字形识别为“${best.trigram}”象，原文：“${best.basis}”。原书取其性情为“${info.nature}”，程序据此映射到${direction}及相应位置。`,
     });
     detected.push(`${best.trigram}象`);
   }
 
   if (element && rounds.length < 3) {
     rounds.push({
-      eyebrow: `${rounds.length + 1 === 1 ? "第一" : rounds.length + 1 === 2 ? "第二" : "第三"}轮 · 五行笔形`,
-      title: `留意${element.element}性物体附近`,
-      body: `当前笔迹中${element.element}笔占优。把${elementPlaces[element.element]}列为下一检查项；这是笔形取类，不等于确定材质。`,
-      tags: [`${element.element}笔`, "附近属性"], basis: element.basis,
+      eyebrow: `${rounds.length + 1 === 1 ? "第一" : rounds.length + 1 === 2 ? "第二" : "第三"}处`,
+      searchArea: elementPlainNames[element.element], title: `检查${elementPlainNames[element.element]}旁边`,
+      body: `接下来重点检查${elementPlaces[element.element]}。这条线索说的是失物附近的环境，不是说失物本身一定由这种材料制成。`,
+      steps: [`找到附近的${elementPlainNames[element.element]}`, "查看它的上面、下面、背后和缝隙", "再检查紧挨着它的容器或家具"],
+      tags: [elementPlainNames[element.element], "检查附近"], basis: `笔形统计以“${element.element}”类笔画占优。原文：“${element.basis}”。`,
     });
     detected.push(`${element.element}笔占优`);
   }
@@ -200,9 +213,10 @@ export function runRuleEngine(input: { character: string; strokes: Stroke[]; tim
   const movementChars = "这过还进远近道送追退逃运迟速边连迷返迎选通逛走";
   if (movementChars.includes(input.character) && rounds.length < 3) {
     rounds.push({
-      eyebrow: `${rounds.length + 1 === 1 ? "第一" : rounds.length + 1 === 2 ? "第二" : "第三"}轮 · 移动线索`,
-      title: "物品存在被移动的可能",
-      body: "这个字带有明确的行走形态。系统只提示它可能不在原来的落点，不指认任何人，也不能作为偷窃证据。",
+      eyebrow: `${rounds.length + 1 === 1 ? "第一" : rounds.length + 1 === 2 ? "第二" : "第三"}处`,
+      searchArea: "最近被移动过的物品附近", title: "检查最近有人挪动过的地方",
+      body: "先检查最近有人走动、搬动或随手拿放过的范围。这里只表示物品可能被移动，不表示有人偷走了它。",
+      steps: ["回想物品最后出现后，谁整理或移动过附近东西", "检查最近挪动过的袋子、衣物、盒子和家具", "询问是否有人顺手带到别处，但不要指认任何人"],
       tags: ["可能移动", "不指认他人"], basis: "马星以走形为据；这里只保留移动可能性，不扩展人物判断。",
     });
     detected.push("走形");
@@ -210,8 +224,9 @@ export function runRuleEngine(input: { character: string; strokes: Stroke[]; tim
 
   if (rounds.length === 0) {
     rounds.push({
-      eyebrow: "可靠线索不足", title: "这个字没有触发可执行的失物专条",
-      body: "当前固定规则没有识别出足以给出方位或附近属性的笔形。系统在这里停止，不使用生活常识或随机方位补答案。",
+      eyebrow: "没有明确位置", searchArea: "没有可执行地点", title: "这个字没有给出明确的寻找位置",
+      body: "固定规则没有识别出足够明确的方向或附近环境。系统在这里停止，不用随机方向或生活常识补一个答案。",
+      steps: ["先暂停本次推演", "按最后一次使用物品的时间线进行普通寻找"],
       tags: ["不补答案"], basis: "古籍没有形成可机器执行的对应条目。",
     });
   }
